@@ -5,27 +5,6 @@ import psycopg2
 import pandas as pd
 from io import StringIO
 
-# Initialize connection.
-# Uses st.cache_resource to only run once.
-
-def init_connection():
-    return psycopg2.connect(**st.secrets["postgres"])
-
-conn = init_connection()
-
-# Perform query.
-# Uses st.cache_data to only rerun when the query changes or after 10 min.
-@st.cache_data(ttl=600)
-def run_query(query):
-    with conn.cursor() as cur:
-        cur.execute(query)
-        return cur.fetchall()
-
-def get_unit_numbers_by_fleet(fleet_name):
-    # Query the database to fetch unit numbers based on the fleet name
-    query = f"SELECT unit FROM masterdata WHERE fleet = '{fleet_name}';"
-    result = run_query(query)
-    return [row[0] for row in result]
 
 def get_user_input():
     st.header("Input Fleet and Scenarios")
