@@ -1,4 +1,13 @@
 import streamlit as st
+import psycopg2
+
+# Initialize connection.
+# Uses st.cache_resource to only run once.
+@st.cache_resource
+def init_connection():
+    return psycopg2.connect(**st.secrets["postgres"])
+
+conn = init_connection()
 
 def get_user_input():
     st.header("Input Unit Numbers and Scenarios")
