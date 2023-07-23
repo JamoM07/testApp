@@ -1,1 +1,1 @@
-psycopg2-binary==x.x.x
+psycopg2-binary
