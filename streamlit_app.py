@@ -1,3 +1,5 @@
+# streamlit_app.py
+
 import streamlit as st
 import psycopg2
 
@@ -8,6 +10,20 @@ def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 
 conn = init_connection()
+
+# Perform query.
+# Uses st.cache_data to only rerun when the query changes or after 10 min.
+@st.cache_data(ttl=600)
+def run_query(query):
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+rows = run_query("SELECT * from mytable;")
+
+# Print results.
+for row in rows:
+    st.write(f"{row[0]} has a :{row[1]}:")
 
 def get_user_input():
     st.header("Input Unit Numbers and Scenarios")
