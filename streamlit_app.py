@@ -1,3 +1,14 @@
+# fix repetitive functions & naming convention needs to be improved (variables and functions)
+# clean up comments and old/ unused code
+# break down into multiple files/sheets
+# main.py, 
+# later: pmo2 on same timeline as pmo1/3, npv and final outputs/ summaries
+
+## LEGEND ##
+# IW38 = cost
+# IP24/18/19 = strategy
+# IK17 = counter
+
 #import necessary libraries
 import streamlit as st
 import psycopg2
@@ -7,9 +18,11 @@ import numpy as np
 from io import StringIO
 from datetime import datetime
 from calendar import monthrange
+from pandas.tseries.offsets import MonthBegin
 
 #type of fleet
-# *** adujust for new site ***
+# ***adjust for new site ***
+# read in from the fleet table/list
 fleet_options = [
     "", "Excavator - Large", "Excavator - Large H1200", "Excavator - Large H2600", "D11R Dozers", "D11 Dozers", "D10 Dozers", "992 Loaders", "993 Loaders", "777F Haul Trucks", "777F Water Trucks", "Floats", "Graders", "Support Dozers", "Scrub Dozer", "Drills", "Road Trains"
 ]
@@ -25,14 +38,13 @@ def init_connection():
 
 ##Streamlit set up
 #set page layout in streamlit to be wide
-    st.set_page_config(layout="wide")
+st.set_page_config(layout="wide")
 #caches data for 10 minutes (600 secs)
 @st.cache_data(ttl=600)
 def run_query(query):
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
-
 
 #function to read in csv or xlsx files and return an error if incorrect format
 def read_file(file_data):
@@ -57,14 +69,13 @@ def to_financial_month(date):
     month_offset = 6
     financial_month = (date.month - 1 + month_offset) % 12 + 1
     financial_year = date.year if date.month < 7 else date.year + 1
-    #print(f"Financial Month: {financial_month}, Type: {type(financial_month)}")
-    #print(f"Financial Year: {financial_year}, Type: {type(financial_year)}")
     fin_month_str = f"{financial_year}-{financial_month:02d}"
     # Return as a period object
     return pd.Period(fin_month_str, freq='M')
 
 #function to convert the maintenance interval to hours using the strategy and the average usage per day
-# *** adujust for new site??? ***
+# *** adjust for new site??? ***
+#100k hour strategies are conditional
 def convert_interval_to_hours(interval, average_usage_per_day):
     time_period = interval[-1]
     if time_period == "H":
@@ -84,21 +95,15 @@ def convert_interval_to_hours(interval, average_usage_per_day):
     else:
         raise ValueError(f"Invalid time period: {time_period}. Supported time periods are h, H, M, W, D, K, and Y.")
     
-
+#currently unused *******************************
 def calculate_costs(smu, coefficients):
-    """
-    Calculate monthly and cumulative costs based on SMU and coefficients.
-    Assuming a quadratic relationship: cost = a * smu^2 + b * smu.
-    :param smu: Service Meter Units
-    :param coefficients: Coefficients [a, b] for the quadratic cost model
-    :return: The cost for the given SMU
-    """
+    # takes in coefficients to find cost for given hours
     a, b = coefficients
     return a * smu**2 + b * smu
 
 ##Setting up
 #function for getting unit numbers for the fleet
-# *** adujust for new site ***
+
 def get_unit_numbers_by_fleet(fleet_name, POSTGRES):
     query = f"SELECT unit FROM fleet_list WHERE fleet = '{fleet_name}';"
     result_final = []
@@ -107,30 +112,27 @@ def get_unit_numbers_by_fleet(fleet_name, POSTGRES):
         #st.warning("Could not connect to the database. Please upload the extra required files.")
         st.sidebar.subheader("Database file uploads")
         uploaded_fleet_list = st.sidebar.file_uploader("Upload Fleet List", type=["csv", "xlsx"])
-        uploaded_linked_ip24 = st.sidebar.file_uploader("Upload Linked IP24", type=["csv", "xlsx"])
+        uploaded_linked_strategy = st.sidebar.file_uploader("Upload Linked Strategy", type=["csv", "xlsx"])
         
-        if uploaded_fleet_list is not None and uploaded_linked_ip24 is not None:
+        if uploaded_fleet_list is not None and uploaded_linked_strategy is not None:
             # Read the uploaded files
             fleet_list = read_file(uploaded_fleet_list)
             result_df = fleet_list[fleet_list['Fleet'] == fleet_name]['Unit']
             result_final = result_df.tolist()
-            
-            #Process data from uploaded files
-            #processed_data = process_data(fleet_list, linked_ip24)
     else:
-        uploaded_linked_ip24 = None
+        uploaded_linked_strategy = None
         result = run_query(query)
         result_final = [row[0] for row in result]
-    return result_final, uploaded_linked_ip24
+    return result_final, uploaded_linked_strategy
 #function to get the user inputs
-# *** adujust for new site ***
+
 def get_user_input(POSTGRES):
     #set up sidebar in streamlit
     st.sidebar.header("Input Assumptions")
     #list fleet options and select required fleet
     selected_fleet = st.sidebar.selectbox("Choose Fleet Option", fleet_options, index=0)
     #determine unit numbers based on chosen fleet
-    unit_numbers, uploaded_linked_ip24 = get_unit_numbers_by_fleet(selected_fleet, POSTGRES)
+    unit_numbers, uploaded_linked_strategy = get_unit_numbers_by_fleet(selected_fleet, POSTGRES)
     if unit_numbers:
         st.sidebar.write(f"Unit Numbers: {unit_numbers}")
     #input end of life date
@@ -145,16 +147,16 @@ def get_user_input(POSTGRES):
         strategy_hours[strategy_name] = st.sidebar.number_input(f"{strategy_name} - Replacement Hours", min_value=0, value=60000, step=20000)
     #upload the data files
     st.sidebar.subheader("File Uploads")
-    iw38_data = st.sidebar.file_uploader("Upload IW38 Data", type=["csv", "xlsx"])
-    ik17_component_data = st.sidebar.file_uploader("Upload IK17 Component Data", type=["csv", "xlsx"])
-    ik17_master_data = st.sidebar.file_uploader("Upload IK17 Master Data", type=["csv", "xlsx"])
+    cost_data = st.sidebar.file_uploader("Upload Cost Data", type=["csv", "xlsx"])
+    component_counter_data = st.sidebar.file_uploader("Upload Component Counter Data", type=["csv", "xlsx"])
+    master_counter_data = st.sidebar.file_uploader("Upload Master Counter Data", type=["csv", "xlsx"])
     unit_scenarios = {}
     #replacement hours for each unit
     for unit_number in unit_numbers:
         unit_scenarios[unit_number] = strategy_hours
     eol_date = pd.Timestamp(eol_date)
     #return the replacement hours for each unit, data files, chosen fleet and end of life date
-    return unit_scenarios, iw38_data, ik17_component_data, ik17_master_data, selected_fleet, eol_date, unit_numbers, uploaded_linked_ip24
+    return unit_scenarios, cost_data, component_counter_data, master_counter_data, selected_fleet, eol_date, unit_numbers, uploaded_linked_strategy
 
 #####################placeholder for npv
 def calculate_npv(scenario_hours):
@@ -171,137 +173,136 @@ def output_page(unit_scenarios):
             st.write(f"{scenario}: NPV - ${npv_value:.2f}")
 
 #filter IW38 for only PMO2 and calculate average cost for each maint item
-# *** adujust for new site ***
-def read_iw38_data_pm02(df):
-    df_filtered = df[df.iloc[:, 0] == "PM02"]
-    st.write(df_filtered)
-    avg_cost_df = df_filtered[df_filtered["TotSum (actual)"] > 10].groupby("MaintItem")["TotSum (actual)"].mean()
-    return avg_cost_df
+
+def avg_cost_data_pm02(df_cost):
+    df_filtered = df_cost[df_cost.iloc[:, 0] == "PM02"]
+    #st.write(df_filtered)
+    df_avg_cost = df_filtered[df_filtered["TotSum (actual)"] > 10].groupby("MaintItem")["TotSum (actual)"].mean()
+    return df_avg_cost
 
 #extract required data for the chosen fleet from master ip24 database
-# *** adujust for new site ***
-def get_master_ip24_data(selected_units, uploaded_linked_ip24):
-    if uploaded_linked_ip24 is not None:
-        linked_ip24 = read_file(uploaded_linked_ip24)
+
+def get_master_strategy_data(selected_units, uploaded_linked_strategy):
+    if uploaded_linked_strategy is not None:
+        linked_strategy = read_file(uploaded_linked_strategy)
         expected_columns = [
             "Unit", "FunctionalLoc", "MaintenancePlan", "MaintItem", "MaintItemText", 
             "Description", "MaintItemDesc", "MaintItemInterval", "ik17component"
         ]
         for column in expected_columns:
-            if column not in linked_ip24.columns:
-                linked_ip24[column] = pd.NA
+            if column not in linked_strategy.columns:
+                linked_strategy[column] = pd.NA
 
         # Reorder DataFrame to match the expected format
-        linked_ip24_df = linked_ip24[expected_columns]
-        result_df = linked_ip24_df[linked_ip24_df['Unit'].isin(selected_units)]
+        df_linked_strategy = linked_strategy[expected_columns]
+        df_result = df_linked_strategy[df_linked_strategy['Unit'].isin(selected_units)]
     else:
         unit_numbers_str = ", ".join(f"'{unit}'" for unit in selected_units)
         query = f"SELECT * FROM linkedip24 WHERE unit IN ({unit_numbers_str});"
         result = run_query(query)
-        result_df = pd.DataFrame(result, columns=["Unit", "FunctionalLoc", "MaintenancePlan", "MaintItem", "MaintItemText", "Description","MaintItemDesc","MaintItemInterval","ik17component"])
-    return result_df
+        df_result = pd.DataFrame(result, columns=["Unit", "FunctionalLoc", "MaintenancePlan", "MaintItem", "MaintItemText", "Description","MaintItemDesc","MaintItemInterval","ik17component"])
+    return df_result
 
 #combine required data from iw38 and master ip24
-# *** adujust for new site ***
-def filter_iw38_data_pm02(iw38_df, selected_fleet, uploaded_linked_ip24):
-    iw38_filtered_df_PMO2 = read_iw38_data_pm02(iw38_df)
-    fleet_ip24_data = get_master_ip24_data(selected_fleet, uploaded_linked_ip24)
-    if fleet_ip24_data is not None:
-        fleet_ip24_data = pd.merge(fleet_ip24_data, iw38_filtered_df_PMO2, on="MaintItem", how="left")
-    return iw38_filtered_df_PMO2, fleet_ip24_data
+
+def filter_cost_data_pm02(df_cost_data, selected_fleet, uploaded_linked_strategy):
+    df_cost_filtered_PMO2 = avg_cost_data_pm02(df_cost_data)
+    fleet_strategy_data = get_master_strategy_data(selected_fleet, uploaded_linked_strategy)
+    if fleet_strategy_data is not None:
+        fleet_strategy_data = pd.merge(fleet_strategy_data, df_cost_filtered_PMO2, on="MaintItem", how="left")
+    return df_cost_filtered_PMO2, fleet_strategy_data
 
 #filter IW38 for only PMO1 and calculate average cost for each maint item
-# *** adujust for new site ***
-def process_iw38_data_pm01(df):
-    df_filtered = df[df["Order Type"] == "PM01"]
-    df_filtered1 = df_filtered[~df_filtered['Description'].str.contains('warranty', case=False, na= False)]
-    #ensure date is datetime type
-    df_filtered1["Actual Finish"] = pd.to_datetime(df_filtered1["Actual Finish"])
-    #convert to fiscal month
-    df_filtered1["FinMonth"] = df_filtered1.apply(lambda x: to_financial_month(x["Actual Finish"]) if pd.notnull(x["Actual Finish"]) else to_financial_month(x["Basic fin. date"]), axis=1)
-    #create pivot table (needs to use maximum counter reading per month per unit)
-    pivot_cost_pmo1 = df_filtered1.pivot_table(values="Total act.costs", index="FinMonth", columns = "Sort field", aggfunc = "sum")
-    return pivot_cost_pmo1
 
-#filter IW38 for only PMO1 and calculate average cost for each maint item
-# *** adujust for new site ***
-def process_iw38_data_pm03(df):
-    df_filtered = df[df["Order Type"] == "PM03"]
-    df_filtered1 = df_filtered[~df_filtered['Description'].str.contains('warranty', case=False, na= False)]
+# only need one of the following (pass in PMO1/3)
+##########################
+def pivot_cost_data(df_cost_data, data_type):
+    df_filtered = df_cost_data[df_cost_data["Order Type"] == data_type]
+    df_filtered_warranty = df_filtered[~df_filtered['Description'].str.contains('warranty', case=False, na= False)]
     #ensure date is datetime type
-    df_filtered1["Actual Finish"] = pd.to_datetime(df_filtered1["Actual Finish"])
+    df_filtered_warranty["Actual Finish"] = pd.to_datetime(df_filtered_warranty["Actual Finish"])
     #convert to fiscal month
-    df_filtered1["FinMonth"] = df_filtered1.apply(lambda x: to_financial_month(x["Actual Finish"]) if pd.notnull(x["Actual Finish"]) else to_financial_month(x["Basic fin. date"]), axis=1)
+    df_filtered_warranty["FinMonth"] = df_filtered_warranty.apply(lambda x: to_financial_month(x["Actual Finish"]) if pd.notnull(x["Actual Finish"]) else to_financial_month(x["Basic fin. date"]), axis=1)
     #create pivot table (needs to use maximum counter reading per month per unit)
-    pivot_cost_pmo3 = df_filtered1.pivot_table(values="Total act.costs", index="FinMonth", columns = "Sort field", aggfunc = "sum")
-    return pivot_cost_pmo3
+    pivot_cost = df_filtered_warranty.pivot_table(values="Total act.costs", index="FinMonth", columns = "Sort field", aggfunc = "sum")
+    return pivot_cost
 
 #extract counter reading data from ik17 master
-# *** adujust for new site ***
-def process_ik17_master_data(ik17_master_df):
+
+def process_master_counter_data(df_master_counter):
     relevant_columns = ["MeasPosition", "Counter reading", "Date"]
-    ik17_df = ik17_master_df[relevant_columns].copy()
-    ik17_df["Date"] = pd.to_datetime(ik17_df["Date"])
-    group_data = ik17_df.groupby("MeasPosition").agg(
+    df_master_counter_short = df_master_counter[relevant_columns].copy()
+    df_master_counter_short["Date"] = pd.to_datetime(df_master_counter_short["Date"])
+    summary_data = df_master_counter_short.groupby("MeasPosition").agg(
         Max_Hour_Reading=("Counter reading", "max"),
         Min_Hour_Reading=("Counter reading", "min"),
         Min_Date=("Date", "min"),
         Max_Date=("Date", "max")
     )
-    group_data["Hours_Used"] = group_data["Max_Hour_Reading"] - group_data["Min_Hour_Reading"]
-    group_data["Total_Days"] = (group_data["Max_Date"] - group_data["Min_Date"]).dt.days + 1
-    group_data["Average_Hours_Per_Day"] = group_data["Hours_Used"] / group_data["Total_Days"]
-    group_data.reset_index(inplace=True)
-    return group_data
+    summary_data["Hours_Used"] = summary_data["Max_Hour_Reading"] - summary_data["Min_Hour_Reading"]
+    summary_data["Total_Days"] = (summary_data["Max_Date"] - summary_data["Min_Date"]).dt.days + 1
+    summary_data["Average_Hours_Per_Day"] = summary_data["Hours_Used"] / summary_data["Total_Days"]
+    summary_data.reset_index(inplace=True)
+    return summary_data
 
-# *** adujust for new site ***
-def pivot_ik17_master_data(ik17_master_df):
+
+def pivot_master_counter_data(df_master_counter):
     #ensure date is datetime type
-    ik17_master_df["Date"] = pd.to_datetime(ik17_master_df["Date"])
+    df_master_counter["Date"] = pd.to_datetime(df_master_counter["Date"])
     #convert to fiscal month
-    ik17_master_df["FinMonth"] = ik17_master_df["Date"].apply(to_financial_month)
-    #extract month from date
-    #ik17_master_df["Month"] = ik17_master_df["FinMonth"].dt.to_period("M")
+    df_master_counter["FinMonth"] = df_master_counter["Date"].apply(to_financial_month)
     #create pivot table (needs to use maximum counter reading per month per unit)
-    pivot_smu = ik17_master_df.pivot_table(values="Counter reading", index="FinMonth", columns = "MeasPosition", aggfunc = "max")
+    pivot_smu = df_master_counter.pivot_table(values="Counter reading", index="FinMonth", columns = "MeasPosition", aggfunc = "max")
     return pivot_smu
 
-# *** adujust for new site ***
+
 #merge ip24 fleet data with ik17 component data
-def merge_ik17_data(fleet_ip24_data, ik17_component_df, group_data):
-    ik17_component_df.rename(columns={"Measuring point": "ik17component"}, inplace=True)
-    merged_data = pd.merge(fleet_ip24_data, ik17_component_df, on="ik17component", how="left")
-    ik17_component_df.rename(columns={"Counter reading": "Counter reading (IK17)"}, inplace=True)
-    merged_data = pd.merge(merged_data, group_data[["MeasPosition", "Average_Hours_Per_Day"]], left_on="Unit", right_on="MeasPosition", how="left")
+def merge_counter_strategy_data(fleet_strategy_data, df_component_counter, summary_data):
+    df_component_counter.rename(columns={"Measuring point": "ik17component"}, inplace=True)
+    merged_data = pd.merge(fleet_strategy_data, df_component_counter, on="ik17component", how="left")
+    df_component_counter.rename(columns={"Counter reading": "Counter reading (IK17)"}, inplace=True)
+    merged_data = pd.merge(merged_data, summary_data[["MeasPosition", "Average_Hours_Per_Day"]], left_on="Unit", right_on="MeasPosition", how="left")
     merged_data["MaintItemInterval"] = merged_data.apply(lambda row: convert_interval_to_hours(row["MaintItemInterval"], row["Average_Hours_Per_Day"]), axis=1)
     return merged_data
 
-# *** adujust for new site ***
+# *** adjust for new site **
 #merging smu and cost pivots
-def combine_pivots(pivot_smu, pivot_cost_PMO1, pivot_cost_PMO3, group_data, unit_numbers):
+def combine_cost_smu_pivots(pivot_smu, pivot_cost_PM01, pivot_cost_PM03, summary_data, unit_numbers):
     pivot_smu_reset = pivot_smu.reset_index()
     pivot_smu_reset.rename(columns={"MeasPosition": "Sort field"}, inplace=True)
-    pivot_cost_PMO1_reset = pivot_cost_PMO1.reset_index()
-    pivot_cost_PMO3_reset = pivot_cost_PMO3.reset_index()
     smu_melted = pivot_smu_reset.melt(id_vars=["FinMonth"], var_name="Sort field", value_name="Counter reading")
-    cost_PMO1_melted = pivot_cost_PMO1_reset.melt(id_vars=["FinMonth"], var_name="Sort field", value_name="Total act.costs")
-    cost_PMO3_melted = pivot_cost_PMO3_reset.melt(id_vars=["FinMonth"], var_name="Sort field", value_name="Total act.costs")
-    merged_pivots1 = pd.merge(smu_melted, cost_PMO1_melted, on=["FinMonth", "Sort field"], how = "outer")
-    merged_pivots = pd.merge(merged_pivots1, cost_PMO3_melted, on=["FinMonth", "Sort field"], how = "outer")
+    
+    # Dictionary to hold the melted DataFrames
+    melted_dataframes = {}
+    # List of tuples containing the DataFrame and its associated key
+    df_pivots = [
+        (pivot_cost_PM01, 'PMO1'),
+        (pivot_cost_PM03, 'PMO3')
+    ]
+    # Loop over the DataFrames to reset the index and melt them
+    for df_pivot, key in df_pivots:
+        # Reset the index
+        pivot_reset = df_pivot.reset_index()
+        # Melt the DataFrame
+        df_melted = pivot_reset.melt(id_vars=["FinMonth"], var_name="Sort field", value_name=f"Total act.costs")
+        # Store the melted DataFrame in the dictionary
+        melted_dataframes[key] = df_melted
+
+    merged_pivots1 = pd.merge(smu_melted, melted_dataframes['PMO1'], on=["FinMonth", "Sort field"], how = "outer")
+    merged_pivots = pd.merge(merged_pivots1, melted_dataframes['PMO3'], on=["FinMonth", "Sort field"], how = "outer")
     merged_pivots["Round SMU"] = (merged_pivots["Counter reading"] / 1000).round() * 1000
     #
-    cumulative, machine_stats = cumulative_costs(merged_pivots, group_data, unit_numbers)
-    return cumulative, machine_stats
-
+    cumulative = cumulative_costs(merged_pivots)
+    return cumulative
 
 
 #outline replacement schedule for each unit
-def create_replacement_schedule(complete_df, current_month, eol_date):
+def create_PMO2_replacement_schedule(df_complete, current_month, eol_date):
     all_months = pd.date_range(current_month, eol_date, freq='M')
     replacement_schedule = pd.DataFrame(columns=["Interval", "Usual Days Until Replacement", "Unit", "Overdue", "Cost Missing"] + [month.strftime('%b-%y') for month in all_months])
     last_replacement_dates = {}
 
-    for index, row in complete_df.iterrows():
+    for index, row in df_complete.iterrows():
         first_replacement_month = None
         replacement_schedule.loc[index, "MaintItem"] = row["MaintItem"]
         replacement_schedule.loc[index, "Interval"] = row["MaintItemInterval"]
@@ -339,47 +340,27 @@ def create_replacement_schedule(complete_df, current_month, eol_date):
 
     return replacement_schedule
 
-# *** adujust for new site ***
-def PMO1_fit(merged_pivots):
-    pivot_table_max = merged_pivots.pivot_table(values='CumulativeCostX', 
+#one function ##########################
+def smu_cost_fit(merged_pivots, X):
+    pivot_table_max = merged_pivots.pivot_table(values='CumulativeCost%s' %X, 
                                                 index='Round SMU', 
                                                 columns='Sort field', 
                                                 aggfunc='max')
-    pivot_table_max['AverageCumulativeCostX'] = pivot_table_max.mean(axis=1)
+    pivot_table_max['AverageCumulativeCost%s' %X] = pivot_table_max.mean(axis=1)
     # Assuming pivot_table_max is the pivot table created earlier
-    cleaned_data = pivot_table_max[['AverageCumulativeCostX']].dropna()
+    cleaned_data = pivot_table_max[['AverageCumulativeCost%s' %X]].dropna()
     x = cleaned_data.index.values  # SMU values
-    y = cleaned_data['AverageCumulativeCostX'].values  # Average cumulative cost values
+    y = cleaned_data['AverageCumulativeCost%s' %X].values  # Average cumulative cost values
     # Construct the design matrix for quadratic fit (x^2 and x terms)
     X = np.vstack([x**2, x]).T  # .T to transpose, making it two columns
     # Solve the least squares problem
-    coefficients_PMO1, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-    y_pred = coefficients_PMO1[0] * x**2 + coefficients_PMO1[1] * x  # Predicted y values based on the fit
+    coefficients, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+    # Rsquared:
+    y_pred = coefficients[0] * x**2 + coefficients[1] * x  # Predicted y values based on the fit
     SS_res = np.sum((y - y_pred)**2)  # Sum of squares of residuals
     SS_tot = np.sum((y - np.mean(y))**2)  # Total sum of squares
     R_squared = 1 - (SS_res / SS_tot)
-    return coefficients_PMO1, R_squared
-
-# *** adujust for new site ***
-def PMO3_fit(merged_pivots):
-    pivot_table_max = merged_pivots.pivot_table(values='CumulativeCostY', 
-                                                index='Round SMU', 
-                                                columns='Sort field', 
-                                                aggfunc='max')
-    pivot_table_max['AverageCumulativeCostY'] = pivot_table_max.mean(axis=1)
-    # Assuming pivot_table_max is the pivot table created earlier
-    cleaned_data = pivot_table_max[['AverageCumulativeCostY']].dropna()
-    x = cleaned_data.index.values  # SMU values
-    y = cleaned_data['AverageCumulativeCostY'].values  # Average cumulative cost values
-    # Construct the design matrix for quadratic fit (x^2 and x terms)
-    X = np.vstack([x**2, x]).T  # .T to transpose, making it two columns
-    # Solve the least squares problem
-    coefficients_PMO3, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-    y_pred = coefficients_PMO3[0] * x**2 + coefficients_PMO3[1] * x  # Predicted y values based on the fit
-    SS_res = np.sum((y - y_pred)**2)  # Sum of squares of residuals
-    SS_tot = np.sum((y - np.mean(y))**2)  # Total sum of squares
-    R_squared = 1 - (SS_res / SS_tot)
-    return coefficients_PMO3, R_squared
+    return coefficients, R_squared
 
 ########################
 def forecast_monthly_costs(iw39_df):
@@ -389,33 +370,30 @@ def forecast_monthly_costs(iw39_df):
     # Replace this with your actual forecasting logic.
     return
 
-
-
 #displaying and merging data outputs
-def process_data(fleet_input, unit_scenarios, iw38_df, ik17_component_df, ik17_master_df, uploaded_linked_ip24):
+def merge_all_data(fleet_input, unit_scenarios, df_cost, df_component_counter, df_master_counter, uploaded_linked_strategy):
     selected_fleet = unit_scenarios.keys()
-    iw38_filtered_df, fleet_ip24_data = filter_iw38_data_pm02(iw38_df, selected_fleet, uploaded_linked_ip24)
-    if iw38_filtered_df is None:
+    df_cost_filtered_PM02, fleet_strategy_data = filter_cost_data_pm02(df_cost, selected_fleet, uploaded_linked_strategy)
+    if df_cost_filtered_PM02 is None:
         return
-    group_data = process_ik17_master_data(ik17_master_df) if ik17_master_df is not None else None
-    merged_data = merge_ik17_data(fleet_ip24_data, ik17_component_df, group_data) if ik17_component_df is not None else None
-    display_data(fleet_input, iw38_filtered_df, fleet_ip24_data, group_data, merged_data)
+    summary_data = process_master_counter_data(df_master_counter) if df_master_counter is not None else None
+    merged_data = merge_counter_strategy_data(fleet_strategy_data, df_component_counter, summary_data) if df_component_counter is not None else None
+    display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summary_data, merged_data)
     return merged_data
 
-# *** adujust for new site ***
 #displaying all the extracted data
-def display_data(fleet_input, iw38_filtered_df, fleet_ip24_data, group_data, merged_data):
-    if iw38_filtered_df is not None and fleet_ip24_data is not None:
-        st.subheader("Filtered IW38 Data (PM02) with Average Cost")
-        st.write(iw38_filtered_df)
-        st.header(f"{fleet_input} IP24 Data (Filtered by Unit Numbers with Average Cost per WO)")
-        fleet_ip24_data = st.data_editor(fleet_ip24_data)
-    elif group_data is not None:
-        st.write(group_data)
+def display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summary_data, merged_data):
+    if df_cost_filtered_PM02 is not None and fleet_strategy_data is not None:
+        st.subheader("Filtered Cost Data (PM02) with Average Cost")
+        st.write(df_cost_filtered_PM02)
+        st.header(f"{fleet_input} Strategy Data (Filtered by Unit Numbers with Average Cost per WO)")
+        fleet_strategy_data = st.data_editor(fleet_strategy_data)
+    elif summary_data is not None:
+        st.write(summary_data)
     elif merged_data is not None:
-        st.header("IK17 Component Data")
+        st.header("Component Counter Data")
         st.data_editor(merged_data)
-        st.header("IK17 Component Data with Maintenance Interval in Hours")
+        st.header("Component Counter Data with Maintenance Interval in Hours")
         st.data_editor(merged_data)
 
 #overview of financial years
@@ -447,11 +425,7 @@ def show_fy_overview(replacement_schedule, start_date, end_date):
     return fy_overview
 
 
-
-
-
-# *** adujust for new site ***
-def cumulative_costs(merged_pivots, group_data, unit_numbers): #### maybe not any use yet
+def cumulative_costs(merged_pivots): 
     # Replace NaN in cost columns with 0
     merged_pivots['Total act.costs_x'] = merged_pivots['Total act.costs_x'].fillna(0)
     merged_pivots['Total act.costs_y'] = merged_pivots['Total act.costs_y'].fillna(0)
@@ -487,17 +461,22 @@ def cumulative_costs(merged_pivots, group_data, unit_numbers): #### maybe not an
         merged_pivots.loc[machine_mask, 'CumulativeCostX'] = merged_pivots.loc[machine_mask, 'Total act.costs_x'].cumsum() + merged_pivots.loc[first_index, 'InitialCumulativeFactorX'] - merged_pivots.loc[first_index, 'Total act.costs_x']
         merged_pivots.loc[machine_mask, 'CumulativeCostY'] = merged_pivots.loc[machine_mask, 'Total act.costs_y'].cumsum() + merged_pivots.loc[first_index, 'InitialCumulativeFactorY'] - merged_pivots.loc[first_index, 'Total act.costs_y']
 
+    return merged_pivots
 
-    return merged_pivots, machine_stats
 
-# *** adujust for new site ***
-def forecast_unit_costs(start_month, end_of_life, current_hours, avg_hours_per_day, replacement_hours, coefficients_costX, coefficients_costY):
+def forecast_unit_costs(start_month, end_of_life, current_hours, avg_hours_per_day, replacement_hours, coefficients_PM01, coefficients_PM03):
     months = pd.date_range(start=start_month, end=end_of_life, freq='MS')
     operating_hours = 0
     cumulative_hours = current_hours
-    cumulative_costX = cumulative_costY = 0
-    monthly_costX = monthly_costY = 0
+    cumulative_costPM01 = cumulative_costPM03 = 0
+    monthly_costPM01 = monthly_costPM03 = 0
     forecast_data = []
+
+    # use first full month
+    if start_month.day > 1:
+        adjusted_start_month = start_month + MonthBegin(1)
+    else:
+        adjusted_start_month = start_month
 
     for month in months:
         # Get the number of days in the month
@@ -511,27 +490,27 @@ def forecast_unit_costs(start_month, end_of_life, current_hours, avg_hours_per_d
         operating_hours = avg_hours_per_day * days_in_month
         cumulative_hours += operating_hours
 
-        new_cumulative_costX = coefficients_costX[0] * cumulative_hours ** 2 + coefficients_costX[1] * cumulative_hours
-        new_cumulative_costY = coefficients_costY[0] * cumulative_hours ** 2 + coefficients_costY[1] * cumulative_hours
+        new_cumulative_costPM01 = coefficients_PM01[0] * cumulative_hours ** 2 + coefficients_PM01[1] * cumulative_hours
+        new_cumulative_costPM03 = coefficients_PM03[0] * cumulative_hours ** 2 + coefficients_PM03[1] * cumulative_hours
 
-        if month == start_month:
-            monthly_costX = 0
-            monthly_costY = 0
+        if  month == adjusted_start_month:
+            monthly_costPM01 = 0
+            monthly_costPM03 = 0
         else:
-            monthly_costX = new_cumulative_costX - cumulative_costX
-            monthly_costY = new_cumulative_costY - cumulative_costY
+            monthly_costPM01 = new_cumulative_costPM01 - cumulative_costPM01
+            monthly_costPM03 = new_cumulative_costPM03 - cumulative_costPM03
 
-        cumulative_costX = new_cumulative_costX
-        cumulative_costY = new_cumulative_costY
+        cumulative_costPM01 = new_cumulative_costPM01
+        cumulative_costPM03 = new_cumulative_costPM03
 
         forecast_data.append({
             'Month': month.strftime('%Y-%m'),
             'Operating Hours': operating_hours,
             'Cumulative Hours': cumulative_hours,
-            'Cumulative CostX': cumulative_costX,
-            'Cumulative CostY': cumulative_costY,
-            'Monthly CostX': monthly_costX,
-            'Monthly CostY': monthly_costY
+            'Cumulative CostX': cumulative_costPM01,
+            'Cumulative CostY': cumulative_costPM03,
+            'Monthly CostX': monthly_costPM01,
+            'Monthly CostY': monthly_costPM03
         })
     else:
         # If loop did not break, all months are forecasted, and no replacement is needed
@@ -543,7 +522,7 @@ def calculate_average_daily_hours(units_data):
     total_hours = sum(data['avg_daily_hours'] for data in units_data.values())
     return total_hours / len(units_data)
 
-def forecast_for_scenario(unit, units_data, start_month, scenario_name, scenario_replacement_hours, coefficients_costX, coefficients_costY, end_of_life):
+def forecast_for_scenario(unit, units_data, start_month, scenario_replacement_hours, coefficients_costX, coefficients_costY, end_of_life):
     current_hours = units_data[unit]['current_hours']
     avg_hours_per_day = units_data[unit]['avg_daily_hours']
     
@@ -554,18 +533,18 @@ def forecast_for_scenario(unit, units_data, start_month, scenario_name, scenario
     
     return forecast, replacement_start_month
 
-def forecast_all_units_scenarios(unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life):
+def forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenarios, coefficients_costPM01, coefficients_costPM03, end_of_life):
     all_scenarios_forecasts = {}
     average_daily_hours = calculate_average_daily_hours(units_data)
-    start_month = pd.Timestamp('2024-04-01')  # Starting month (adjust if needed)
+    #start_month = pd.Timestamp('2024-04-01')  # Starting month (adjust if needed)
 
     for scenario_name, replacement_hours in scenarios.items():
         scenario_forecasts = {}
         
         for unit in unit_numbers:
             forecast, replacement_start_month = forecast_for_scenario(
-                unit, units_data, start_month, scenario_name, replacement_hours,
-                coefficients_costX, coefficients_costY, end_of_life
+                unit, units_data, start_month, replacement_hours,
+                coefficients_costPM01, coefficients_costPM03, end_of_life
             )
             
             scenario_forecasts[unit] = forecast
@@ -579,15 +558,15 @@ def forecast_all_units_scenarios(unit_numbers, units_data, scenarios, coefficien
                 }
                 scenario_forecasts[replacement_unit], _ = forecast_unit_costs(
                     replacement_start_month, end_of_life, 0, average_daily_hours,
-                    replacement_hours, coefficients_costX, coefficients_costY
+                    replacement_hours, coefficients_costPM01, coefficients_costPM03
                 )
         
         all_scenarios_forecasts[scenario_name] = scenario_forecasts
 
     return all_scenarios_forecasts
 
-def forecast_all_units_scenarios_to_csv(unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life, output_csv):
-    all_scenarios_forecasts = forecast_all_units_scenarios(unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life)
+def forecast_all_units_scenarios_to_csv(start_month, unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life, output_csv):
+    all_scenarios_forecasts = forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life)
     
     # Flatten the nested structure into a list of dictionaries for easy export to CSV
     csv_data = []
@@ -601,7 +580,6 @@ def forecast_all_units_scenarios_to_csv(unit_numbers, units_data, scenarios, coe
     # Create a DataFrame and write it to a CSV file
     df = pd.DataFrame(csv_data)
     df.to_csv(output_csv, index=False)
-
 
 def format_forecast_outputs(all_scenarios_forecasts):
     data = []
@@ -642,11 +620,12 @@ def format_forecast_outputs(all_scenarios_forecasts):
 
 
 #main func to call all functions and run the streamlit app 
+# needs to be broken down/ cleaned up
 def main(POSTGRES):
     st.title("Tundra Resource Analytics - Equipment Strategy Optimization Tool")
-    current_month = pd.Timestamp("2024-03-13")
+    current_month = pd.Timestamp('2024-04-13')
 
-    unit_scenarios, iw38_data, ik17_component_data, ik17_master_data, fleet_input, eol_date, unit_numbers, uploaded_linked_ip24 = get_user_input(POSTGRES)
+    unit_scenarios, cost_data, component_counter_data, master_counter_data, fleet_input, eol_date, unit_numbers, uploaded_linked_strategy = get_user_input(POSTGRES)
     st.header("User Input")
     pm01_pm03_df = None
     for unit, scenarios in unit_scenarios.items():
@@ -655,30 +634,28 @@ def main(POSTGRES):
     if st.button("Show"):
         
         selected_fleet = unit_scenarios.keys()
-        # *** adujust for new site ***
-        if not selected_fleet and not iw38_data:
-            st.info("Please choose a fleet option and upload the IW38 data to view Master IP24 Data with Average Cost.")
-        elif not iw38_data:
-            st.info("Please upload the IW38 data.")
+        if not selected_fleet and not cost_data:
+            st.info("Please choose a fleet option and upload the cost data to view Master Strategy Data with Average Cost.")
+        elif not cost_data:
+            st.info("Please upload the cost data.")
         elif not selected_fleet:
             st.info("Please choose a fleet option.")   
-        elif not ik17_component_data:
+        elif not component_counter_data:
             st.info("Please upload the IW17 component data.")
-        elif not ik17_master_data:
+        elif not master_counter_data:
             st.info("Please upload the IW17 master data.")
         else:
-            iw38_df = read_file(iw38_data)
-            ik17_component_df = read_file(ik17_component_data)
-            ik17_master_df = read_file(ik17_master_data)
-            pivot_smu = pivot_ik17_master_data(ik17_master_df)
-            print(pivot_smu)
+            df_cost = read_file(cost_data)
+            df_component_counter = read_file(component_counter_data)
+            df_master_counter = read_file(master_counter_data)
+            pivot_smu = pivot_master_counter_data(df_master_counter)
             st.success("All data uploaded successfully!")
-            complete_df = process_data(fleet_input, unit_scenarios,iw38_df,ik17_component_df,ik17_master_df, uploaded_linked_ip24)
-            ##pm01_pm03_df = pm13_iw39_data(iw38_df)
+            complete_df = merge_all_data(fleet_input, unit_scenarios,df_cost,df_component_counter,df_master_counter, uploaded_linked_strategy)
+            
             if complete_df is not None:
                 st.header("Complete Data")
                 st.dataframe(complete_df)
-                replacement_schedule = create_replacement_schedule(complete_df, current_month, eol_date)
+                replacement_schedule = create_PMO2_replacement_schedule(complete_df, current_month, eol_date)
                 st.session_state['replacement_schedule'] = replacement_schedule
                 cost_missing_indices = replacement_schedule[replacement_schedule["Cost Missing"]].index
                 for idx in cost_missing_indices:
@@ -687,41 +664,31 @@ def main(POSTGRES):
                 for idx in overdue_indices:
                     replacement_schedule.loc[idx, "First Replacement Month"] = st.date_input(f"Enter first replacement date for overdue component {replacement_schedule.loc[idx, 'MaintItem']}:", value=pd.to_datetime('today'))
             
-            pmo1_cost_pivot = process_iw38_data_pm01(iw38_df)
-            print(pmo1_cost_pivot)
-            pmo3_cost_pivot = process_iw38_data_pm03(iw38_df)
-            print(pmo3_cost_pivot)
-            #################
-            group_data = process_ik17_master_data(ik17_master_df)
-            print(group_data)
-            print(group_data["Max_Hour_Reading"])
-            merged_pivots, machine_stats = combine_pivots(pivot_smu, pmo1_cost_pivot, pmo3_cost_pivot, group_data, unit_numbers)
-            print(merged_pivots)
+            pmo1_cost_pivot = pivot_cost_data(df_cost, "PM01")
+            pmo3_cost_pivot = pivot_cost_data(df_cost, "PM03")
+            summary_data = process_master_counter_data(df_master_counter)
+            merged_pivots = combine_cost_smu_pivots(pivot_smu, pmo1_cost_pivot, pmo3_cost_pivot, summary_data, unit_numbers)
             merged_pivots.to_csv('merged_pivots_test.csv', index=False)
 
-            coeff_PMO1, Rsquare_PMO1 = PMO1_fit(merged_pivots)
-            print("PMO1 Coeff = ", coeff_PMO1 , "Rsquare = ", Rsquare_PMO1)
-            coeff_PMO3, Rsquare_PMO3 = PMO3_fit(merged_pivots)
-            print("PMO3 Coeff = ", coeff_PMO3 , "Rsquare = ", Rsquare_PMO3)
-            #############################
-
-            # *** adujust for new site ***
-            current_hours = group_data.set_index('MeasPosition')['Max_Hour_Reading'].to_dict()
-            average_daily_hours = group_data.set_index('MeasPosition')['Average_Hours_Per_Day'].to_dict()
+            coeff_PMO1, Rsquare_PMO1 = smu_cost_fit(merged_pivots, "X")
+            coeff_PMO3, Rsquare_PMO3 = smu_cost_fit(merged_pivots, "Y")
+            
+            current_hours = summary_data.set_index('MeasPosition')['Max_Hour_Reading'].to_dict()
+            average_daily_hours = summary_data.set_index('MeasPosition')['Average_Hours_Per_Day'].to_dict()
             units_data = {unit: {'current_hours': current_hours[unit],
                      'avg_daily_hours': average_daily_hours[unit]}
               for unit in unit_numbers}
             scenarios = next(iter(unit_scenarios.values()))
-            coefficients_costX = coeff_PMO1  # Replace with actual coefficients
-            coefficients_costY = coeff_PMO3  # Replace with actual coefficients
+            coefficients_costX = coeff_PMO1
+            coefficients_costY = coeff_PMO3 
             end_of_life = eol_date
 
-            all_scenarios_forecasts = forecast_all_units_scenarios(unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life)
+            all_scenarios_forecasts = forecast_all_units_scenarios(current_month, unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life)
             st.session_state['all_scenarios_forecasts'] = all_scenarios_forecasts
 
             output_csv = 'PMO13forecasts.csv'  # Specify your output CSV file name here
-            forecast_all_units_scenarios_to_csv(unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life, output_csv)
-            ################################
+            forecast_all_units_scenarios_to_csv(current_month, unit_numbers, units_data, scenarios, coefficients_costX, coefficients_costY, end_of_life, output_csv)
+
     if st.button("Confirm"):
         if 'replacement_schedule' in st.session_state:
             replacement_schedule = st.session_state['replacement_schedule']
@@ -741,7 +708,6 @@ if __name__ == "__main__":
     conn = init_connection()
     if conn is not None:
         POSTGRES = 1
-        main(POSTGRES)
     else:
         POSTGRES = 0
-        main(POSTGRES)
+    main(POSTGRES)
