@@ -1,5 +1,12 @@
-# clean up comments and old/ unused code
-# later: pmo2 on same timeline as pmo1/3, npv and final outputs/ summaries
+# TUNDRA ESO Application code v1
+# Written by Jamieson Mulready and Samantha McMaster
+
+""" 
+LEGEND for SAP data
+        IW38 = cost
+        IP24/18/19 = strategy
+        IK17 = counter
+"""
 
 #import necessary libraries
 import ETL
@@ -12,28 +19,42 @@ import pandas as pd
 from pandas.tseries.offsets import MonthBegin
 
 def main(POSTGRES):
-    # Initialize or check the connection to PostgreSQL
-    #conn = helper.init_connection()
-    # Setup and get user inputs
-    current_month = display.page_setup()
-    unit_scenarios, cost_data, component_counter_data, master_counter_data, fleet_input, eol_date, unit_numbers, uploaded_linked_strategy, rep_cost = display.get_user_input(POSTGRES)
+    # setup and connect to database or add manual inputs
+    display.page_setup()
+    uploaded_fleet_list = None
+    uploaded_linked_strategy = None
+    if POSTGRES == False:
+        fleets, uploaded_fleet_list, uploaded_linked_strategy = display.manual_inputs()
+    else:
+        fleets = display.database_inputs()
 
-    # Display units and scenarios
+    # get user inputs: scenarios, EOL date, datasets
+    unit_scenarios, cost_data, component_counter_data, master_counter_data, fleet_input, eol_date, unit_numbers, repl_cost = display.get_user_input(fleets, uploaded_fleet_list)
+
+    # display units and scenarios
     for unit, scenarios in unit_scenarios.items():
         st.write(f"Unit {unit}: {scenarios}")
 
-    # Load and display data if 'Show' button is clicked
+    # load and display data if 'Show' button is clicked 
     if st.button("Show Data"):
-        df_cost, df_component_counter, df_master_counter, pivot_smu = display.load_and_display_data(fleet_input, unit_scenarios, cost_data, component_counter_data, master_counter_data, uploaded_linked_strategy)
-        # # Collect inputs and confirm to process data
-        df_complete = st.session_state["df_complete"]
-        display.process_data(df_complete, current_month, eol_date, df_cost, df_master_counter, unit_numbers, unit_scenarios, pivot_smu, rep_cost)
+        # show, input and check all the required files
+        df_cost, df_master_counter, df_component_counter = display.load_data(fleet_input, unit_scenarios, cost_data, component_counter_data, master_counter_data, uploaded_linked_strategy)
+        # process, merge and format all the data for calculations
+        summary_data, merged_pivots, df_cost_filtered_PM02, merged_data, fleet_strategy_data = ETL.main(df_cost, df_master_counter, unit_numbers, uploaded_linked_strategy, df_component_counter)
+        # display the formatted input data
+        display.display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summary_data, merged_data)
+        # perform all the calculations; replacement scheduling and forecasting etc.
+        replacement_schedule, formatted_forecasts, formatted_forecasts_long, fy_overview = calc.main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter)
+        # display outputs; replacement schedules and forecasts as well as summaries of results
+        display.display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, fy_overview)
 
+# read in current month
+now = pd.Timestamp.now().date()
+current_month = pd.to_datetime(now)
+# check connection to postgres database and run the main function
 if __name__ == "__main__":
     POSTGRES = True if helper.init_connection() is not None else False
-    #st.write(POSTGRES)
     main(POSTGRES)
-
 
 
 
@@ -45,13 +66,13 @@ if __name__ == "__main__":
 # a different way to input missing costs and overdue replacement dates will be needed
 def collect_inputs():
     #st.header("Edit Missing Costs and Overdue Dates")
-    df_complete = st.session_state['df_complete']
+    #df_complete = st.session_state['df_complete']
     df_complete.to_csv('complete_data_editable.csv', index=False)
     if st.button("Reupload filled in data"):
         uploaded_filled_data = st.sidebar.file_uploader("Upload Filled in Dataset in sidebar", type=["csv", "xlsx"])
         df_complete = uploaded_filled_data
     if st.button("Confirm complete dataset"):
-        st.session_state['df_complete'] = df_complete
+        #st.session_state['df_complete'] = df_complete
         st.header("Final dataset")
         st.write(df_complete)
 
