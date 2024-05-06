@@ -1,11 +1,5 @@
-## LEGEND ##
-# IW38 = cost
-# IP24/18/19 = strategy
-# IK17 = counter
-
-import ETL
-import calc
-import display
+# TUNDRA ESO Application code v1
+# Written by Jamieson Mulready and Samantha McMaster
 
 import streamlit as st
 import psycopg2
@@ -55,9 +49,8 @@ def to_financial_month(date):
     # Return as a period object
     return pd.Period(fin_month_str, freq='M')
 
-#function to convert the maintenance interval to hours using the strategy and the average usage per day
-# *** adjust for new site??? ***
-#100k hour strategies are conditional
+# convert the maintenance interval to hours using the strategy and the average usage per day
+##### NOTE: 100k hour strategies are conditional
 def convert_interval_to_hours(interval, average_usage_per_day):
     time_period = interval[-1]
     if time_period == "H":
@@ -76,5 +69,3 @@ def convert_interval_to_hours(interval, average_usage_per_day):
         return int(interval[:-1])*average_usage_per_day * 365.25
     else:
         raise ValueError(f"Invalid time period: {time_period}. Supported time periods are h, H, M, W, D, K, and Y.")
-    
-
