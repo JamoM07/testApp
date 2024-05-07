@@ -106,17 +106,24 @@ def display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summar
         st.header("Component Counter Data with Maintenance Interval in Hours")
         st.data_editor(merged_data)
     
-def display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, pm02_fy_overview):
-    st.header("Replacement Schedule")
-    st.dataframe(replacement_schedule)
-    #fy_overview = calc.pm02_fy_overview(replacement_schedule, current_month, eol_date)
-    st.header("FY Overview")
-    st.write(pm02_fy_overview)
-    #df, df_long_format = calc.format_forecast_outputs(all_scenarios_forecasts)
+def display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, pm02_fy_overviews, PM01_3_fy_overviews):
+    st.header("PM02 Replacement Schedules")
+    for scenario_name, df in replacement_schedule.items():
+        st.subheader(f"{scenario_name}:")
+        st.write(df)
+    st.header("PM02 FY Overviews")
+    for scenario_name, df in pm02_fy_overviews.items():
+        st.subheader(f"{scenario_name}:")
+        st.write(df)
+    
     st.header("PMO1 and PMO3 Cost Forecast")
     st.dataframe(formatted_forecasts)
-    #PM01_3_FY_summary = calc.fy_summary_PM01_3(formatted_forecasts_long, repl_cost)
-    #st.write(PM01_3_FY_summary)
+
+    st.header("PM01 and PM03 FY Overviews")
+    for scenario_name, df in PM01_3_fy_overviews.items():
+        st.subheader(f"{scenario_name}:")
+        st.dataframe(df)
+
     st.success("Data processing complete!")
 
 

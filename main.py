@@ -44,9 +44,9 @@ def main(POSTGRES):
         # display the formatted input data
         display.display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summary_data, merged_data)
         # perform all the calculations; replacement scheduling and forecasting etc.
-        replacement_schedule, formatted_forecasts, formatted_forecasts_long, fy_overview = calc.main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter)
+        replacement_schedule, formatted_forecasts, formatted_forecasts_long, PM02fy_overviews, PM01_3_fy_overviews = calc.main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter)
         # display outputs; replacement schedules and forecasts as well as summaries of results
-        display.display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, fy_overview)
+        display.display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, PM02fy_overviews, PM01_3_fy_overviews)
 
 # read in current month
 now = pd.Timestamp.now().date()
