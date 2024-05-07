@@ -24,6 +24,7 @@ def create_PM02_replacement_schedule(df_complete, current_month, eol_date, repla
         replacement_schedule.loc[index, "MaintItem"] = row["MaintItem"]
         replacement_schedule.loc[index, "Interval"] = row["MaintItemInterval"]
         replacement_schedule.loc[index, "Unit"] = row["Unit"]
+        unit = row["Unit"]
         interval = row["MaintItemInterval"]
         usage = row["Average_Hours_Per_Day"]
         current = row["Counter reading"]
@@ -36,8 +37,17 @@ def create_PM02_replacement_schedule(df_complete, current_month, eol_date, repla
         else:
             first_replacement_month = current_month + pd.DateOffset(days=(interval - current) / usage)
         replacement_schedule.loc[index, "Usual Days Until Replacement"] = usual
+
+        unit_replacements = replacement_dates.get(unit, [])
+
         for month in all_months:
             month_str = month.strftime('%b-%y')
+            # Check for replacement dates
+            #if any(pd.to_datetime(replacement_date) == month for replacement_date in unit_replacements):
+            if any(pd.to_datetime(replacement_date).strftime('%Y-%m') == month.strftime('%Y-%m') for replacement_date in unit_replacements):
+                
+                first_replacement_month = month + pd.DateOffset(days=interval / usage if usage else float('inf'))
+
             if first_replacement_month > eol_date:
                 break
             if month >= first_replacement_month:
@@ -51,18 +61,16 @@ def create_PM02_replacement_schedule(df_complete, current_month, eol_date, repla
                 last_replacement_dates[row["MaintItem"]] = first_replacement_month - pd.DateOffset(days=int(interval / usage))
     return replacement_schedule
 
-# add cumulative costs to the smu and cost table
-def cumulative_costs(merged_pivots): 
-    # Replace NaN in cost columns with 0
+def prepare_and_sort_data(merged_pivots):
+    """Handle NaNs and sort the DataFrame."""
     merged_pivots['Total act.costs_PM01'] = merged_pivots['Total act.costs_PM01'].fillna(0)
     merged_pivots['Total act.costs_PM03'] = merged_pivots['Total act.costs_PM03'].fillna(0)
-    # First, ensure your DataFrame is sorted by "sort field" (machine) and then by "month/year" to correctly calculate cumulative costs.
     merged_pivots.sort_values(by=["Sort field", "FinMonth"], inplace=True)
-    # Group by 'sort field' and then apply forward fill within each group
-    merged_pivots['Round SMU'] = merged_pivots.groupby('Sort field')['Round SMU'].fillna(method='ffill')
-    # Group by 'sort field' and then apply backfill within each group
-    merged_pivots['Round SMU'] = merged_pivots.groupby('Sort field')['Round SMU'].fillna(method='bfill')
-    # Calculate the total sum of costs, and min and max SMU (hours) for each machine.
+    return merged_pivots
+
+def compute_machine_stats(merged_pivots):
+    """Compute machine stats and initial cumulative cost factors."""
+    merged_pivots['Round SMU'] = merged_pivots.groupby('Sort field')['Round SMU'].fillna(method='ffill').fillna(method='bfill')
     machine_stats = merged_pivots.groupby('Sort field').agg(
         TotalCostsPM01=("Total act.costs_PM01", 'sum'),
         TotalCostsPM03=("Total act.costs_PM03", 'sum'),
@@ -70,23 +78,29 @@ def cumulative_costs(merged_pivots):
         MaxSMU=("Counter reading", 'max'),
         RoundMinSMU=("Round SMU", 'min')
     ).reset_index()
-    # Now, calculate the initial cumulative cost factor based on your formula.
     machine_stats['InitialCumulativeFactorPM01'] = (machine_stats['TotalCostsPM01'] / (machine_stats['MaxSMU'] - machine_stats['MinSMU'])) * 0.5 * machine_stats['RoundMinSMU']
     machine_stats['InitialCumulativeFactorPM03'] = (machine_stats['TotalCostsPM03'] / (machine_stats['MaxSMU'] - machine_stats['MinSMU'])) * 0.5 * machine_stats['RoundMinSMU']
-    # Merge this factor back into the original DataFrame on "sort field" to have the initial cumulative cost factor available for each row.
+    return machine_stats
+
+def merge_and_calculate_cumulative_costs(merged_pivots, machine_stats):
+    """Merge machine stats and calculate cumulative costs."""
     merged_pivots = merged_pivots.merge(machine_stats[['Sort field', 'InitialCumulativeFactorPM01']], on='Sort field')
     merged_pivots = merged_pivots.merge(machine_stats[['Sort field', 'InitialCumulativeFactorPM03']], on='Sort field')
-    # For each machine, calculate the cumulative costs, starting with the initial value for the earliest month, then cumulatively summing up total act.costs_x and total act.costs_y respectively.
-    # Initialize columns to store the cumulative costs
-    merged_pivots['CumulativeCostPM01'] = 0
-    merged_pivots['CumulativeCostPM03'] = 0
-    # Iterate over each machine to calculate cumulative costs#
     for machine in merged_pivots['Sort field'].unique():
         machine_mask = merged_pivots['Sort field'] == machine
         first_index = merged_pivots.loc[machine_mask].index[0]
         merged_pivots.loc[machine_mask, 'CumulativeCostPM01'] = merged_pivots.loc[machine_mask, 'Total act.costs_PM01'].cumsum() + merged_pivots.loc[first_index, 'InitialCumulativeFactorPM01'] - merged_pivots.loc[first_index, 'Total act.costs_PM01']
         merged_pivots.loc[machine_mask, 'CumulativeCostPM03'] = merged_pivots.loc[machine_mask, 'Total act.costs_PM03'].cumsum() + merged_pivots.loc[first_index, 'InitialCumulativeFactorPM03'] - merged_pivots.loc[first_index, 'Total act.costs_PM03']
     return merged_pivots
+
+# Main function to run all steps
+def cumulative_costs(merged_pivots):
+    """Main function to manage cumulative costs calculation."""
+    merged_pivots = prepare_and_sort_data(merged_pivots)
+    machine_stats = compute_machine_stats(merged_pivots)
+    merged_pivots = merge_and_calculate_cumulative_costs(merged_pivots, machine_stats)
+    return merged_pivots
+
 
 # find quadratic fit between smu and cost
 def smu_cost_fit(merged_pivots, X):
@@ -128,14 +142,16 @@ def process_master_counter_data(df_master_counter):
     summary_data.reset_index(inplace=True)
     return summary_data
 
-# running forecast for all scenarios and units
-def forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenarios, coefficients_costPM01, coefficients_costPM03, end_of_life):
+def forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenarios, coefficients_costPM01, coefficients_costPM03, end_of_life, merged_data):
     all_scenarios_forecasts = {}
-    replacement_dates = {} 
+    PM02_replacement_schedules = {}
+    
     average_daily_hours = calculate_average_daily_hours(units_data)
+
     for scenario_name, replacement_hours in scenarios.items():
         scenario_forecasts = {}
-        scenario_replacement_dates = {}
+        scenario_replacement_dates = {unit: [] for unit in unit_numbers}  # Initialize once per scenario for all units
+
         for unit in unit_numbers:
             current_hours = units_data[unit]['current_hours']
             avg_hours_per_day = units_data[unit]['avg_daily_hours']
@@ -144,21 +160,26 @@ def forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenario
                 replacement_hours, coefficients_costPM01, coefficients_costPM03
             )
             scenario_forecasts[unit] = forecast
-            if replacement_start_month:
-                scenario_replacement_dates[unit] = replacement_start_month
-                # Forecast for the replacement unit in this scenario
-                replacement_unit = f"{unit}_replacement_{scenario_name}"
-                units_data[replacement_unit] = {
-                    'current_hours': 0,
-                    'avg_daily_hours': average_daily_hours
-                }
-                scenario_forecasts[replacement_unit], _ = forecast_unit_costs(
+
+            # Continuously check for further replacements
+            while replacement_start_month:
+                scenario_replacement_dates[unit].append(replacement_start_month)  # Track dates under the original unit
+                replacement_unit = f"{unit}_replacement_{replacement_start_month.strftime('%Y%m%d')}_{scenario_name}"
+                if replacement_unit not in units_data:
+                    units_data[replacement_unit] = {
+                        'current_hours': 0,
+                        'avg_daily_hours': average_daily_hours
+                    }
+                scenario_forecasts[replacement_unit], replacement_start_month = forecast_unit_costs(
                     replacement_start_month, end_of_life, 0, average_daily_hours,
                     replacement_hours, coefficients_costPM01, coefficients_costPM03
                 )
+
         all_scenarios_forecasts[scenario_name] = scenario_forecasts
-        replacement_dates[scenario_name] = scenario_replacement_dates
-    return all_scenarios_forecasts, replacement_dates
+        PM02_replacement_schedules[scenario_name] = create_PM02_replacement_schedule(merged_data, start_month, end_of_life, scenario_replacement_dates)
+        
+    return all_scenarios_forecasts, PM02_replacement_schedules
+
 
 # find average daily operating hours
 def calculate_average_daily_hours(units_data):
@@ -167,26 +188,28 @@ def calculate_average_daily_hours(units_data):
 
 # forecasting for PM01 and PM03 costs for a unit
 def forecast_unit_costs(start_month, end_of_life, current_hours, avg_hours_per_day, replacement_hours, coefficients_PM01, coefficients_PM03):
+
     months = pd.date_range(start=start_month, end=end_of_life, freq='MS')
     operating_hours = 0
     cumulative_hours = current_hours
     cumulative_costPM01 = cumulative_costPM03 = 0
     monthly_costPM01 = monthly_costPM03 = 0
     forecast_data = []
-    # use first full month
-    if start_month.day > 1:
-        adjusted_start_month = start_month + MonthBegin(1)
-    else:
-        adjusted_start_month = start_month
+    adjusted_start_month = start_month + MonthBegin(1) if start_month.day > 1 else start_month
+
     for month in months:
-        # Get the number of days in the month
+        if month < adjusted_start_month:
+            continue  # Skip partial month at the start, if policy allows
+
         days_in_month = pd.Period(month, freq='M').days_in_month
         if cumulative_hours >= replacement_hours:
-            # If the unit needs replacement, record the current month and break
-            replacement_start_month = month
+            replacement_start_month = month  # Use the current month, not the next
             break
+
         operating_hours = avg_hours_per_day * days_in_month
         cumulative_hours += operating_hours
+
+    
         new_cumulative_costPM01 = coefficients_PM01[0] * cumulative_hours ** 2 + coefficients_PM01[1] * cumulative_hours
         new_cumulative_costPM03 = coefficients_PM03[0] * cumulative_hours ** 2 + coefficients_PM03[1] * cumulative_hours
         if  month == adjusted_start_month:
@@ -210,7 +233,6 @@ def forecast_unit_costs(start_month, end_of_life, current_hours, avg_hours_per_d
         # If loop did not break, all months are forecasted, and no replacement is needed
         replacement_start_month = None
     return forecast_data, replacement_start_month
-
 
 # correctly format the forecast for reading, keep long format as easier for processing but wide format better for reading
 def format_forecast_outputs(all_scenarios_forecasts):
@@ -277,45 +299,62 @@ def PM02_fy_overview(replacement_schedule, start_date, end_date):
 def calculate_npv(scenario_hours):
     return 123456.78
 
-# still work in progress**************************
-def fy_summary_PM01_3(df, repl_cost):
-    # Assuming df is your DataFrame
-    df['Month'] = pd.to_datetime(df['Month'])  # Converting month to datetime
-    df['Year'] = df['Month'].dt.year  # Extracting the year from month for grouping
-    # Group by necessary categories and calculate annual sum and last value of the year
-    annual_summary = df.groupby(['Scenario', 'Unit', 'Data Type', 'Year']).agg(
-        annual_sum=('Value', 'sum'),
-        year_end_smu=('Value', 'last')  # Assumes the data for each month is sorted chronologically
-    ).reset_index()
 
-    # Merge fleet list to get the replacement costs for each unit
-    df = df.merge(repl_cost, on='Unit', how='left')
 
-    # Assuming replacements happen when 'Monthly Hours' go to None (or any logic you define)
-    df['CAPEX'] = df.apply(lambda x: x['Approx. Replacement Cost'] if (x['Data Type'] == 'Monthly Hours' and pd.isna(x['Value'])) else 0, axis=1)
+def fy_overview_PM01_3(full_scenario_outputs, repl_cost, scenario):
+    # Filter for the current scenario
+    df = full_scenario_outputs[full_scenario_outputs['Scenario'] == scenario]
+    # Clean and convert the 'Approx. Replacement Cost' to float after removing $ and commas
+    repl_cost['Approx. Replacement Cost'] = repl_cost['Approx. Replacement Cost'].replace('[\$,]', '', regex=True).astype(float)
+    repl_cost = repl_cost.rename(columns={'Unit': 'Original_Unit'})
 
-    # Aggregate CAPEX by year
-    annual_capex = df.groupby(['Scenario', 'Unit', 'Year'])['CAPEX'].max().reset_index()  # Take max to avoid duplicating costs if more than one month is NaN
-    final_df = annual_summary.merge(annual_capex, on=['Scenario', 'Unit', 'Year'], how='left')
+    # Convert 'Month' to datetime and extract the year
+    df['Month'] = pd.to_datetime(df['Month'])
+    df['Year'] = df['Month'].dt.year
+    
+    # Prepare the data for aggregation
+    pm01 = df[df['Data Type'].str.contains('Monthly Cost PM01')]
+    pm03 = df[df['Data Type'].str.contains('Monthly Cost PM03')]
+    smu_cumulative = df[df['Data Type'].str.contains('Cumulative Hours')]
+    smu_monthly = df[df['Data Type'].str.contains('Operating Hours')]
+    
+    # Group by Unit and Year to aggregate data
+    annual_pm01 = pm01.groupby(['Unit', 'Year'])['Value'].sum().reset_index(name='Annual PM01 Cost')
+    annual_pm03 = pm03.groupby(['Unit', 'Year'])['Value'].sum().reset_index(name='Annual PM03 Cost')
+    annual_smu = smu_monthly.groupby(['Unit', 'Year'])['Value'].sum().reset_index(name='Annual SMU')
+    year_end_smu = smu_cumulative.groupby(['Unit', 'Year'])['Value'].last().reset_index(name='Year-End SMU')
+    
+    # Merge all the dataframes
+    summary = pd.merge(annual_pm01, annual_pm03, on=['Unit', 'Year'], how='outer')
+    summary = pd.merge(summary, annual_smu, on=['Unit', 'Year'], how='outer')
+    summary = pd.merge(summary, year_end_smu, on=['Unit', 'Year'], how='outer')
+    
+    scenario_data = df[df['Scenario'] == scenario]
+    summary['Original_Unit'] = summary['Unit'].str.extract(r'([^_]+)_replacement')
+    
+    # Identify first operational year for each replacement unit
+    replacement_first_year = scenario_data[scenario_data['Unit'].str.contains('replacement')].groupby('Unit')['Year'].min().reset_index()
+    replacement_first_year.rename(columns={'Year': 'First_Year'}, inplace=True)
 
-    # Compute total annual SMU for each scenario and year
-    total_annual_smu = df[df['Data Type'] == 'Monthly Hours'].groupby(['Scenario', 'Year'])['Value'].sum().reset_index()
-    total_annual_smu.rename(columns={'Value': 'Total Annual SMU'}, inplace=True)
+    # Incorporate replacement costs
+    # Assuming repl_cost has columns 'Unit' and 'Approx. Replacement Cost'
+    summary = summary.merge(repl_cost, on='Original_Unit', how='left')
+    summary = summary.merge(replacement_first_year, on='Unit', how='left')
+    
+    #summary['CAPEX'] = summary.apply(lambda x: x['Approx. Replacement Cost'] if 'replacement' in x['Unit'] else 0, axis=1)
+    summary['CAPEX'] = summary.apply(lambda x: x['Approx. Replacement Cost'] if 'replacement' in x['Unit'] and x['Year'] == x['First_Year'] else 0, axis=1)
 
-    # Count CAPEX investments
-    capex_counts = annual_capex.groupby(['Scenario', 'Year'])['CAPEX'].apply(lambda x: (x > 0).sum()).reset_index()
-    capex_counts.rename(columns={'CAPEX': 'CAPEX Investments'}, inplace=True)
-
-    # Merge to the final DataFrame
-    final_df = final_df.merge(total_annual_smu, on=['Scenario', 'Year'], how='left')
-    final_df = final_df.merge(capex_counts, on=['Scenario', 'Year'], how='left')
-
-    return final_df
+    # Reshape for final output format if needed, or additional logic for filtering based on replacement condition
+    summary = summary.pivot_table(index=['Unit'], columns='Year', values=['Annual PM01 Cost', 'Annual PM03 Cost', 'Annual SMU', 'Year-End SMU', 'CAPEX'], aggfunc='sum').fillna(0)
+    
+    return summary
 
 
 # process the data and create replacement schedules and forecasts, calls most of the calc functions
 def main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter):
     # find PM01 and PM03 SMU vs cost fits
+    PM02_fy_overviews = {}
+    PM01_3_fy_overviews = {}
     coeff_PM01, Rsquare_PM01 = smu_cost_fit(merged_pivots, "PM01")
     coeff_PM03, Rsquare_PM03 = smu_cost_fit(merged_pivots, "PM03")
     summary_data = process_master_counter_data(df_master_counter) if df_master_counter is not None else None
@@ -326,23 +365,39 @@ def main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, rep
         for unit in unit_numbers}
     
     scenarios = next(iter(unit_scenarios.values()))
-    all_scenarios_forecasts, replacement_dates = forecast_all_units_scenarios(current_month, unit_numbers, units_data, scenarios, coeff_PM01, coeff_PM03, eol_date)
-    replacement_schedule = create_PM02_replacement_schedule(merged_data, current_month, eol_date, replacement_dates)
-    pm02_fy_overview = PM02_fy_overview(replacement_schedule, current_month, eol_date)
+    all_scenarios_forecasts, PM02_replacement_schedules = forecast_all_units_scenarios(current_month, unit_numbers, units_data, scenarios, coeff_PM01, coeff_PM03, eol_date, merged_data)
+    
+    for scenario_name, replacement_schedule in PM02_replacement_schedules.items():
+        PM02_fy_overviews[scenario_name] = PM02_fy_overview(replacement_schedule, current_month, eol_date)
+    
     formatted_forecasts, formatted_forecasts_long = format_forecast_outputs(all_scenarios_forecasts)
+    
+    for scenario_name in scenarios:
+        PM01_3_fy_overviews[scenario_name] = fy_overview_PM01_3(formatted_forecasts_long, repl_cost, scenario_name)
     #output_csv = 'PMO13forecasts.csv'  # Used for testing. Not really needed Specify your output CSV file name here #####
     #forecast_all_units_scenarios_to_csv(current_month, unit_numbers, units_data, scenarios, coeff_PM01, coeff_PM03, eol_date, output_csv) #####
 
-    return replacement_schedule, formatted_forecasts, formatted_forecasts_long, pm02_fy_overview
+    #st.write(formatted_forecasts_long)
+
+    return PM02_replacement_schedules, formatted_forecasts, formatted_forecasts_long, PM02_fy_overviews, PM01_3_fy_overviews
 
 
 
 
 
 
-
-
-
-
-
+# output forecast to csv (used for testing)
+def forecast_all_units_scenarios_to_csv(start_month, unit_numbers, units_data, scenarios, coefficients_costPM01, coefficients_costPM03, end_of_life, output_csv):
+    all_scenarios_forecasts = forecast_all_units_scenarios(start_month, unit_numbers, units_data, scenarios, coefficients_costPM01, coefficients_costPM03, end_of_life)
+    # Flatten the nested structure into a list of dictionaries for easy export to CSV
+    csv_data = []
+    for scenario, forecasts in all_scenarios_forecasts.items():
+        for unit, unit_forecasts in forecasts.items():
+            for month_data in unit_forecasts:
+                month_data['Unit'] = unit
+                month_data['Scenario'] = scenario
+                csv_data.append(month_data)
+    # Create a DataFrame and write it to a CSV file
+    df = pd.DataFrame(csv_data)
+    df.to_csv(output_csv, index=False)
 
