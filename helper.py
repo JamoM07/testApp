@@ -7,7 +7,7 @@ from psycopg2 import OperationalError
 import pandas as pd
 import numpy as np
 
-#initiate connection to sql database
+# initiate connection to sql database
 def init_connection():
     try:
         conn = psycopg2.connect(**st.secrets["postgres"])
@@ -15,14 +15,15 @@ def init_connection():
     except OperationalError:
         # Could not connect to the database
         return None
-    
+
+# executes an SQL query on the database and returns the results as a list of tuples
 def run_query(query):
     conn = init_connection()
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
     
-#function to read in csv or xlsx files and return an error if incorrect format
+#function to read in csv or xlsx files and return an error if file is incorrect format
 def read_file(file_data):
     if file_data is not None:
         file_extension = file_data.name.split(".")[-1].lower()
@@ -37,7 +38,7 @@ def read_file(file_data):
     else:
         return None
     
-#convert to fiscal month
+#convert to fiscal/ financial month
 def to_financial_month(date):
     if pd.isnull(date):
         return None

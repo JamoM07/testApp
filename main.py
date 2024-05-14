@@ -44,45 +44,15 @@ def main(POSTGRES):
         # display the formatted input data
         display.display_data(fleet_input, df_cost_filtered_PM02, fleet_strategy_data, summary_data, merged_data)
         # perform all the calculations; replacement scheduling and forecasting etc.
-        replacement_schedule, formatted_forecasts, formatted_forecasts_long, PM02fy_overviews, PM01_3_fy_overviews = calc.main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter)
+        replacement_schedule, formatted_forecasts, formatted_forecasts_long, pm02fy_overviews, pm01_3_fy_overviews = calc.main(merged_data, current_month, eol_date, unit_numbers, unit_scenarios, repl_cost, merged_pivots, summary_data, df_master_counter)
         # display outputs; replacement schedules and forecasts as well as summaries of results
-        display.display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, PM02fy_overviews, PM01_3_fy_overviews)
+        display.display_outputs(replacement_schedule, formatted_forecasts, formatted_forecasts_long, pm02fy_overviews, pm01_3_fy_overviews)
 
 # read in current month
 now = pd.Timestamp.now().date()
 current_month = pd.to_datetime(now)
+
 # check connection to postgres database and run the main function
 if __name__ == "__main__":
     POSTGRES = True if helper.init_connection() is not None else False
     main(POSTGRES)
-
-
-
-
-
-
-
-# residual code- inputs in streamlit don't work so well as the page resets when the widgets are interacted with
-# a different way to input missing costs and overdue replacement dates will be needed
-def collect_inputs():
-    #st.header("Edit Missing Costs and Overdue Dates")
-    #df_complete = st.session_state['df_complete']
-    df_complete.to_csv('complete_data_editable.csv', index=False)
-    if st.button("Reupload filled in data"):
-        uploaded_filled_data = st.sidebar.file_uploader("Upload Filled in Dataset in sidebar", type=["csv", "xlsx"])
-        df_complete = uploaded_filled_data
-    if st.button("Confirm complete dataset"):
-        #st.session_state['df_complete'] = df_complete
-        st.header("Final dataset")
-        st.write(df_complete)
-
-    # for index, row in complete_df.iterrows():
-    #     if pd.isna(row["TotSum (actual)"]) or row["TotSum (actual)"] <= 0:
-    #         cost_key = f"cost_{index}"
-    #         new_cost = st.number_input(f"Enter cost for item {index}", key=cost_key, value=row.get("TotSum (actual)", 0))
-    #         complete_df.at[index, "TotSum (actual)"] = new_cost
-        
-    #     if row["MaintItemInterval"] < row["Counter reading"]:
-    #         date_key = f"date_{index}"
-    #         new_date = st.date_input(f"Enter replacement date for item {index}", key=date_key, value=pd.to_datetime(row.get("First Replacement Month", 'today')))
-    #         complete_df.at[index, "First Replacement Month"] = new_date
